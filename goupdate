@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Checks and updates the Go installation in /usr/local/go.
+#
+# Usage:
+#   goupdate check     # reports whether the installed version is the latest (exit 1 if outdated)
+#   goupdate install   # downloads, verifies the checksum and installs the latest version
+set -euo pipefail
+
+GOROOT_DIR=/usr/local/go
+DL_BASE=https://dl.google.com/go
+
+installed_version() {
+  # GOTOOLCHAIN=local prevents a go.mod in the current directory from switching toolchains.
+  if [[ -x "$GOROOT_DIR/bin/go" ]]; then
+    GOTOOLCHAIN=local "$GOROOT_DIR/bin/go" env GOVERSION
+  else
+    echo "none"
+  fi
+}
+
+latest_version() {
+  curl -fsSL 'https://go.dev/VERSION?m=text' | head -n1
+}
+
+platform() {
+  local os arch
+  os=$(uname -s | tr '[:upper:]' '[:lower:]')
+  case "$(uname -m)" in
+    x86_64) arch=amd64 ;;
+    aarch64 | arm64) arch=arm64 ;;
+    armv6l | armv7l) arch=armv6l ;;
+    i386 | i686) arch=386 ;;
+    *) echo "unsupported architecture: $(uname -m)" >&2; exit 2 ;;
+  esac
+  echo "$os-$arch"
+}
+
+cmd_check() {
+  local installed latest
+  installed=$(installed_version)
+  latest=$(latest_version)
+  echo "installed: $installed"
+  echo "latest:    $latest"
+  if [[ "$installed" == "$latest" ]]; then
+    echo "✔ Go is up to date"
+  else
+    echo "✘ a new version is available; run: goupdate install"
+    return 1
+  fi
+}
+
+cmd_install() {
+  local installed latest file tmp expected actual
+  installed=$(installed_version)
+  latest=$(latest_version)
+  if [[ "$installed" == "$latest" ]]; then
+    echo "Go is already at the latest version ($latest)"
+    return 0
+  fi
+
+  file="$latest.$(platform).tar.gz"
+  tmp=$(mktemp -d)
+  # expand $tmp now: the EXIT trap runs after this function returns,
+  # when the local is out of scope (and set -u would abort on it)
+  trap "rm -rf -- $(printf '%q' "$tmp")" EXIT
+
+  echo "downloading $file..."
+  curl -fL --progress-bar -o "$tmp/$file" "$DL_BASE/$file"
+
+  expected=$(curl -fsSL "$DL_BASE/$file.sha256")
+  actual=$(sha256sum "$tmp/$file" | cut -d' ' -f1)
+  if [[ "$expected" != "$actual" ]]; then
+    echo "checksum mismatch (expected $expected, got $actual)" >&2
+    exit 1
+  fi
+  echo "checksum ok"
+
+  echo "installing to $GOROOT_DIR ($installed → $latest)..."
+  sudo rm -rf "$GOROOT_DIR"
+  sudo tar -C "$(dirname "$GOROOT_DIR")" -xzf "$tmp/$file"
+
+  echo "✔ installed: $(installed_version)"
+}
+
+case "${1:-}" in
+  check) cmd_check ;;
+  install) cmd_install ;;
+  *)
+    echo "usage: $(basename "$0") {check|install}" >&2
+    exit 2
+    ;;
+esac
