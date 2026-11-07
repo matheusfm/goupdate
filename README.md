@@ -27,3 +27,7 @@ goupdate install   # download and install the latest version
 ## Requirements
 
 `bash`, `curl`, `tar`, `sha256sum` and `sudo`.
+
+## License
+
+[MIT](LICENSE)
